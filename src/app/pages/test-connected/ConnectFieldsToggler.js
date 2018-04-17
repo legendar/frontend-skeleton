@@ -5,12 +5,14 @@ import { Fields, change as changeField } from 'redux-form'
 import get from 'lodash/get'
 import findIndex from 'lodash/findIndex'
 import without from 'lodash/without'
+import PropTypes from 'prop-types'
 
 export default function ConnectFieldsTogglerHOC({names}) {
   return <Fields names={names} component={ConnectFieldsToggler}/>
 }
 
 @connect(null, {changeField})
+@withFormNameHOC
 class ConnectFieldsToggler extends Component {
   constructor(props) {
     super(props)
@@ -41,7 +43,7 @@ class ConnectFieldsToggler extends Component {
     const value = this.state.values[index]
     const changedName = this.props.names[index]
     without(this.props.names, changedName).forEach(
-      name => this.props.changeField('test-connected', name, value)
+      name => this.props.changeField(this.props.formName, name, value)
     )
   }
 
@@ -73,3 +75,19 @@ function getValues(state, names) {
   return names.map(name => get(state, `${name}.input.value`))
 }
 
+
+function withFormNameHOC(ComposedComponent) {
+  class WithFormNameContainer extends Component {
+    render() {
+      return (
+        <ComposedComponent {...this.props} formName={this.context._reduxForm.form} />
+      )
+    }
+  }
+
+  WithFormNameContainer.contextTypes = {
+    _reduxForm: PropTypes.object.isRequired,
+  }
+
+  return WithFormNameContainer
+}
