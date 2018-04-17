@@ -40,6 +40,8 @@ import { push } from 'react-router-redux'
 // allowed methods
 
 export const REQUEST = '@ds-resource/request'
+export const REQUEST_SUCCESS = '@ds-resource/request-success'
+export const REQUEST_ERROR = '@ds-resource/request-error'
 export const FILTER = '@ds-resource/filter'
 export const SET_DATA = '@ds-resource/set-data'
 export const SET_ERRORS = '@ds-resource/set-errors'
@@ -49,6 +51,22 @@ export const SET_FILTERS = '@ds-resource/set-filters'
 export function request(payload, meta) {
   return {
     type: REQUEST,
+    meta,
+    payload,
+  }
+}
+
+export function requestSuccess(payload, meta) {
+  return {
+    type: REQUEST_SUCCESS,
+    meta,
+    payload,
+  }
+}
+
+export function requestError(payload, meta) {
+  return {
+    type: REQUEST_ERROR,
     meta,
     payload,
   }
@@ -145,13 +163,22 @@ export function connectResource(resource, options = {}) {
     (dispatch, props) => {
       const meta = { resource, props }
 
-      let actions = {
-        create: makeRequestAction('POST', meta),
+      const promiseableActions = {
+        create: makePromisableRequestAction('POST', meta, dispatch),
+        fetch: makePromisableRequestAction('GET', meta, dispatch),
+        update: makePromisableRequestAction('PATCH', meta, dispatch),
+        remove: makePromisableRequestAction('DELETE', meta, dispatch),
+        replace: makePromisableRequestAction('PUT', meta, dispatch),
+        fetchOptions: makePromisableRequestAction('OPTIONS', meta, dispatch),
+      }
+
+      const restActions = {
+        /*create: makeRequestAction('POST', meta),
         fetch: makeRequestAction('GET', meta),
         update: makeRequestAction('PATCH', meta),
         remove: makeRequestAction('DELETE', meta),
         replace: makeRequestAction('PUT', meta),
-        fetchOptions: makeRequestAction('OPTIONS', meta),
+        fetchOptions: makeRequestAction('OPTIONS', meta),*/
 
         filter: (payload, reset = false) => filter(payload, { ...meta, reset }),
         setData: payload => setData(payload, meta),
@@ -159,13 +186,14 @@ export function connectResource(resource, options = {}) {
         setFilters: payload => setFilters(payload, meta),
       }
 
-      actions = {
-        ...actions,
+      const actions = {
+        ...promiseableActions,
+        ...bindActionCreators(restActions, dispatch),
         // aliases // TODO
-        save: actions.update,
+        save: promiseableActions.update,
       }
 
-      return bindActionCreators(actions, dispatch)
+      return actions
     },
 
     // merge
@@ -292,6 +320,19 @@ export function reducer(state = defaultState, { type, payload = {}, meta = {}, e
       }
     }
 
+      //case REQUEST_SUCCESS:
+        /*case REQUEST_ERROR:
+      const currentData = state[meta.resource.namespace]
+
+      return {
+        ...state,
+        [meta.resource.namespace]: {
+          ...currentData,
+          [type === REQUEST_SUCCESS ? 'isRequestSuccess' : 'isRequestError']: true,
+          [type === REQUEST_ERROR ? 'isRequestSuccess' : 'isRequestError']: false,
+        },
+      }*/
+
     case SET_LOADING: {
       const currentData = state[meta.resource.namespace] || { loading: 0 }
       const loading = currentData.loading + payload
@@ -357,7 +398,7 @@ function requestEpic(action$, store, { API }) { // FIXME API
         of(
           setLoading(+1, meta),
           // TODO it seems we can move form-related actions to separate epic
-          submitting && startSubmit(resource.form),
+          //submitting && startSubmit(resource.form),
         ),
         fromPromise(API(endpoint).request(type, query, payload))
           .switchMap(response => of(
@@ -365,15 +406,17 @@ function requestEpic(action$, store, { API }) { // FIXME API
               ? request(undefined, { ...meta, type: 'GET' })
               : setData(response, meta),
             setLoading(-1, meta),
-            submitting && stopSubmit(resource.form),
-            submitting && setSubmitSucceeded(resource.form),
-            submitting && meta.resource.navigateAfterSubmit && push(meta.resource.navigateAfterSubmit),
+            //submitting && stopSubmit(resource.form),
+            //submitting && setSubmitSucceeded(resource.form),
+            //submitting && meta.resource.navigateAfterSubmit && push(meta.resource.navigateAfterSubmit),
+            requestSuccess(response, meta),
           ))
           .catch(err => of(
             setErrors(err.errors || err, meta),
             setLoading(-1, meta),
-            submitting && stopSubmit(resource.form, err.errors || err),
-            submitting && setSubmitFailed(resource.form), // TODO fields list
+            //submitting && stopSubmit(resource.form, err.errors || err),
+            //submitting && setSubmitFailed(resource.form), // TODO fields list
+            requestError(err.errors || err, meta),
           ))
       ).filter(Boolean)
     })
@@ -388,6 +431,17 @@ function filterEpic(action$, store) {
           request(undefined, { ...meta, type: 'GET' }),
         )
       )
+    })
+}
+
+function promiseResolveEpic(action$, store) {
+  return action$.ofType(REQUEST_ERROR, REQUEST_SUCCESS)
+    .mergeMap(function({ meta, payload, type }) {
+      if(meta.requestPromise) {
+        const callback = type === REQUEST_SUCCESS ? 'resolve' : 'reject'
+        meta.requestPromise[callback](payload)
+      }
+      return of({type: '@@NONE'})
     })
 }
 
@@ -412,6 +466,26 @@ function makeRequestAction(type, meta) {
   }
 }
 
+function makePromisableRequestAction(type, meta, dispatch) {
+  const actionCreator = makeRequestAction(type, meta)
+
+  return function() {
+    const {type, meta, payload} = actionCreator.apply(this, arguments)
+    return new Promise((resolve, reject) => {
+      const action = {
+        type,
+        payload,
+        meta: {
+          ...meta,
+          requestPromise: {resolve, reject},
+        }
+      }
+
+      dispatch(action)
+    })
+  }
+}
+
 function parseOptions(options) {
   return merge.apply(null, values(options.actions))
 }
@@ -419,4 +493,5 @@ function parseOptions(options) {
 export const epic = combineEpics(
   requestEpic,
   filterEpic,
+  promiseResolveEpic,
 )
